@@ -13,6 +13,9 @@ import (
 type Config struct {
 	// General
 	Debug bool
+	// Version of the tool, recorded in a written snapshot so that a file can be
+	// traced back to the build that produced it.
+	Version string
 	// Credentials
 	Credentials *credentials.Credentials
 	// Network
@@ -27,6 +30,11 @@ type Config struct {
 	Monitoring Monitoring
 	// Reporting is what the operator asked to be shown out of what changed.
 	Reporting Reporting
+	// OutputFile is where snapshot mode writes its reading.
+	OutputFile string
+	// BeforeFile and AfterFile are the two readings diff mode compares.
+	BeforeFile string
+	AfterFile  string
 }
 
 // LDAP holds the LDAP transport and bind options.
