@@ -11,7 +11,8 @@ import (
 
 	"github.com/TheManticoreProject/manticore-ldapmonitor/cli"
 	"github.com/TheManticoreProject/manticore-ldapmonitor/config"
-	"github.com/TheManticoreProject/manticore-ldapmonitor/monitor"
+	"github.com/TheManticoreProject/manticore-ldapmonitor/directory"
+	"github.com/TheManticoreProject/manticore-ldapmonitor/modes/mode_monitor"
 )
 
 // VERSION is the version of the tool, shown in the banner.
@@ -23,10 +24,15 @@ var (
 	noColors bool
 	logFile  string
 
+	// Scope
+	searchBase string
+	ldapFilter string
+
 	// Monitoring
-	searchBase      string
-	timeDelay       int
-	randomizeDelay  bool
+	timeDelay      int
+	randomizeDelay bool
+
+	// Reporting
 	ignoreUserLogon bool
 
 	// LDAP Connection Settings
@@ -63,10 +69,16 @@ func parseArgs() {
 		group.NewStringArgument(&logFile, "-l", "--logfile", "", false, "Log file to append the output to.")
 	}
 
-	if group, err := ap.NewArgumentGroup("Monitoring"); err != nil {
+	if group, err := ap.NewArgumentGroup("Scope"); err != nil {
 		logger.Warn(fmt.Sprintf("Error creating ArgumentGroup: %s", err))
 	} else {
 		group.NewStringArgument(&searchBase, "-S", "--search-base", "", false, "Distinguished name to monitor. If omitted, every naming context of the domain controller is monitored.")
+		group.NewStringArgument(&ldapFilter, "-f", "--ldap-filter", "(objectClass=*)", false, "LDAP filter restricting which objects are read.")
+	}
+
+	if group, err := ap.NewArgumentGroup("Reporting"); err != nil {
+		logger.Warn(fmt.Sprintf("Error creating ArgumentGroup: %s", err))
+	} else {
 		group.NewBoolArgument(&ignoreUserLogon, "", "--ignore-user-logon", false, "Ignore the lastLogon and logonCount changes produced by user logon events.")
 	}
 
@@ -237,15 +249,20 @@ func main() {
 			DomainController: domainController,
 			Domain:           authDomain,
 		},
+		SearchBase: searchBase,
+		Scope: directory.Scope{
+			LDAPFilter: ldapFilter,
+		},
 		Monitoring: config.Monitoring{
-			SearchBase:      searchBase,
-			TimeDelay:       timeDelay,
-			RandomizeDelay:  randomizeDelay,
+			TimeDelay:      timeDelay,
+			RandomizeDelay: randomizeDelay,
+		},
+		Reporting: config.Reporting{
 			IgnoreUserLogon: ignoreUserLogon,
 		},
 	}
 
-	if err := monitor.Run(cfg); err != nil {
+	if err := mode_monitor.Run(cfg); err != nil {
 		logger.Warn(fmt.Sprintf("Error monitoring LDAP: %s", err))
 		os.Exit(1)
 	}

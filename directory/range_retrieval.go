@@ -1,4 +1,4 @@
-package monitor
+package directory
 
 import (
 	"fmt"
@@ -59,8 +59,9 @@ func HasRangeOption(name string) bool {
 //	ldapSession (*ldap.Session): The connected LDAP session to query.
 //	distinguishedName (string): The distinguished name of the object being read.
 //	attributes (map[string][]string): The attributes of the object, modified in place.
+//	filter (string): The LDAP filter the object was read with.
 //	debug (bool): A flag indicating whether to print debug information.
-func resolveRangedAttributes(ldapSession *ldap.Session, distinguishedName string, attributes map[string][]string, debug bool) {
+func resolveRangedAttributes(ldapSession *ldap.Session, distinguishedName string, attributes map[string][]string, filter string, debug bool) {
 	// The names to work on are collected before the map is modified, rather than
 	// deleting and inserting keys while ranging over it.
 	rangedNames := []string{}
@@ -85,7 +86,7 @@ func resolveRangedAttributes(ldapSession *ldap.Session, distinguishedName string
 		// the range window as a change of the attribute.
 		delete(attributes, name)
 
-		complete, err := fetchRemainingValues(ldapSession, distinguishedName, baseName, values, upperBound, debug)
+		complete, err := fetchRemainingValues(ldapSession, distinguishedName, baseName, values, upperBound, filter, debug)
 		if err != nil {
 			// A truncated attribute is still worth reporting: dropping the object
 			// entirely would hide every other change on it. The values gathered so
@@ -109,13 +110,14 @@ func resolveRangedAttributes(ldapSession *ldap.Session, distinguishedName string
 //	baseName (string): The attribute name without its range option.
 //	values ([]string): The values already returned by the first chunk.
 //	upperBound (string): The upper bound of the first chunk, "*" when it was the last one.
+//	filter (string): The LDAP filter the object was read with.
 //	debug (bool): A flag indicating whether to print debug information.
 //
 // Returns:
 //
 //	Every value of the attribute, and an error if a chunk could not be read, in
 //	which case the values gathered so far are still returned.
-func fetchRemainingValues(ldapSession *ldap.Session, distinguishedName string, baseName string, values []string, upperBound string, debug bool) ([]string, error) {
+func fetchRemainingValues(ldapSession *ldap.Session, distinguishedName string, baseName string, values []string, upperBound string, filter string, debug bool) ([]string, error) {
 	complete := make([]string, 0, len(values))
 	complete = append(complete, values...)
 
@@ -136,7 +138,7 @@ func fetchRemainingValues(ldapSession *ldap.Session, distinguishedName string, b
 			logger.Debug(fmt.Sprintf("Retrieving '%s' of '%s'", rangedName, distinguishedName))
 		}
 
-		entries, err := ldapSession.QueryBaseObject(distinguishedName, snapshotQuery, []string{rangedName})
+		entries, err := ldapSession.QueryBaseObject(distinguishedName, filter, []string{rangedName})
 		if err != nil {
 			return complete, fmt.Errorf("error querying '%s': %w", rangedName, err)
 		}

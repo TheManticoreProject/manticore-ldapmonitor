@@ -1,12 +1,12 @@
-// Package monitor watches an Active Directory domain over LDAP and reports what
-// changes in it: objects created, objects deleted, and the attribute values of
-// existing objects.
+// Package mode_monitor watches an Active Directory domain over LDAP and reports what
+// changes in it, until the process is interrupted: objects created, objects deleted,
+// and the attribute values of existing objects.
 //
-// It works by snapshotting every object of every monitored search base, then
-// comparing the latest snapshot with the previous one. A change is therefore seen at
-// the next query after it lands, and the refresh rate is bounded by how long a full
-// enumeration of the search bases takes.
-package monitor
+// It works by snapshotting every object in scope, then comparing the latest snapshot
+// with the previous one. A change is therefore seen at the next query after it lands,
+// and the refresh rate is bounded by how long a full enumeration of the search bases
+// takes.
+package mode_monitor
 
 import (
 	"fmt"
@@ -20,6 +20,7 @@ import (
 	"github.com/TheManticoreProject/Manticore/network/ldap"
 
 	"github.com/TheManticoreProject/manticore-ldapmonitor/config"
+	"github.com/TheManticoreProject/manticore-ldapmonitor/directory"
 	"github.com/TheManticoreProject/manticore-ldapmonitor/utils"
 )
 
@@ -54,10 +55,11 @@ func Run(cfg config.Config) error {
 
 	utils.AnnounceIdentity(cfg.Credentials)
 
-	searchBases, err := utils.ResolveSearchBases(ldapSession, cfg.Monitoring.SearchBase)
+	searchBases, err := utils.ResolveSearchBases(ldapSession, cfg.SearchBase)
 	if err != nil {
 		return err
 	}
+	cfg.Scope.SearchBases = searchBases
 	utils.AnnounceSearchBases("Monitored search bases", searchBases)
 
 	// Ctrl-C has to end the run cleanly rather than kill it mid-query, so the log
@@ -66,13 +68,13 @@ func Run(cfg config.Config) error {
 	// the tool behaves the same way at every point of the run.
 	stopRequested := watchForInterrupt()
 
-	previousSnapshot, err := TakeSnapshot(ldapSession, searchBases, cfg.Debug)
+	previousSnapshot, err := directory.TakeSnapshot(ldapSession, cfg.Scope, cfg.Debug)
 	if err != nil {
 		return err
 	}
 	logger.Print(fmt.Sprintf("[>] Objects in the initial snapshot: \x1b[93m%d\x1b[0m.", len(previousSnapshot)))
 
-	ignored := IgnoredAttributes(cfg.Monitoring.IgnoreUserLogon)
+	ignored := directory.IgnoredAttributes(cfg.Reporting.IgnoreUserLogon)
 
 	logger.Print("[>] Listening for LDAP changes ...")
 	for {
@@ -93,13 +95,13 @@ func Run(cfg config.Config) error {
 		case <-time.After(delay):
 		}
 
-		currentSnapshot, err := takeSnapshotReconnecting(ldapSession, searchBases, cfg)
+		currentSnapshot, err := takeSnapshotReconnecting(ldapSession, cfg)
 		if err != nil {
 			return err
 		}
 
-		for _, change := range Diff(previousSnapshot, currentSnapshot, ignored) {
-			Render(change)
+		for _, change := range directory.Diff(previousSnapshot, currentSnapshot, ignored) {
+			directory.Render(change)
 		}
 
 		previousSnapshot = currentSnapshot
@@ -163,14 +165,13 @@ func interrupted(stopRequested <-chan struct{}) bool {
 // Parameters:
 //
 //	ldapSession (*ldap.Session): The LDAP session to query, reconnected in place on failure.
-//	searchBases ([]string): The distinguished names to enumerate.
 //	cfg (config.Config): The configuration of the run.
 //
 // Returns:
 //
 //	The snapshot, or an error if the query failed twice.
-func takeSnapshotReconnecting(ldapSession *ldap.Session, searchBases []string, cfg config.Config) (Snapshot, error) {
-	snapshot, err := TakeSnapshot(ldapSession, searchBases, cfg.Debug)
+func takeSnapshotReconnecting(ldapSession *ldap.Session, cfg config.Config) (directory.Snapshot, error) {
+	snapshot, err := directory.TakeSnapshot(ldapSession, cfg.Scope, cfg.Debug)
 	if err == nil {
 		return snapshot, nil
 	}
@@ -182,7 +183,7 @@ func takeSnapshotReconnecting(ldapSession *ldap.Session, searchBases []string, c
 		return nil, fmt.Errorf("error reconnecting to LDAP server: %w", reconnectErr)
 	}
 
-	snapshot, err = TakeSnapshot(ldapSession, searchBases, cfg.Debug)
+	snapshot, err = directory.TakeSnapshot(ldapSession, cfg.Scope, cfg.Debug)
 	if err != nil {
 		return nil, err
 	}

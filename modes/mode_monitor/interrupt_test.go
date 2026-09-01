@@ -1,4 +1,4 @@
-package monitor
+package mode_monitor
 
 import (
 	"os"

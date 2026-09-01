@@ -1,4 +1,4 @@
-package monitor
+package directory
 
 import (
 	"fmt"
@@ -8,32 +8,52 @@ import (
 	"github.com/TheManticoreProject/Manticore/network/ldap"
 )
 
-// snapshotQuery matches every object of a search base, the same way the directory
-// itself enumerates them.
-const snapshotQuery = "(objectClass=*)"
+// DefaultLDAPFilter matches every object of a search base, the same way the
+// directory itself enumerates them.
+const DefaultLDAPFilter = "(objectClass=*)"
+
+// Scope is what to read: where, and which objects.
+type Scope struct {
+	// SearchBases are the distinguished names to enumerate, each as a whole subtree.
+	SearchBases []string `json:"searchBases"`
+	// LDAPFilter restricts which objects are read. Empty means DefaultLDAPFilter.
+	LDAPFilter string `json:"ldapFilter"`
+}
+
+// Filter returns the LDAP filter of the scope, falling back to the default.
+//
+// Returns:
+//
+//	The filter to send.
+func (scope Scope) Filter() string {
+	if scope.LDAPFilter == "" {
+		return DefaultLDAPFilter
+	}
+	return scope.LDAPFilter
+}
 
 // Snapshot is the state of the monitored objects at one point in time: the
 // distinguished name of every object mapped to its attributes, and each attribute
 // mapped to its values.
 type Snapshot map[string]map[string][]string
 
-// TakeSnapshot reads every object of every given search base and returns their
-// current state.
+// TakeSnapshot reads every object in scope and returns their current state.
 //
 // Parameters:
 //
 //	ldapSession (*ldap.Session): The connected LDAP session to query.
-//	searchBases ([]string): The distinguished names to enumerate, each as a whole subtree.
+//	scope (Scope): The search bases to enumerate and the filter to enumerate them with.
 //	debug (bool): A flag indicating whether to print debug information.
 //
 // Returns:
 //
 //	The state of every object found, or an error if a search failed.
-func TakeSnapshot(ldapSession *ldap.Session, searchBases []string, debug bool) (Snapshot, error) {
+func TakeSnapshot(ldapSession *ldap.Session, scope Scope, debug bool) (Snapshot, error) {
 	snapshot := make(Snapshot)
+	filter := scope.Filter()
 
-	for _, searchBase := range searchBases {
-		entries, err := ldapSession.QueryWholeSubtree(searchBase, snapshotQuery, []string{"*"})
+	for _, searchBase := range scope.SearchBases {
+		entries, err := ldapSession.QueryWholeSubtree(searchBase, filter, []string{"*"})
 		if err != nil {
 			return nil, fmt.Errorf("error querying search base '%s': %w", searchBase, err)
 		}
@@ -60,7 +80,7 @@ func TakeSnapshot(ldapSession *ldap.Session, searchBases []string, debug bool) (
 			// This costs extra round-trips only for the objects that actually hold a
 			// truncated attribute.
 			if hasRangedAttribute(attributes) {
-				resolveRangedAttributes(ldapSession, entry.DN, attributes, debug)
+				resolveRangedAttributes(ldapSession, entry.DN, attributes, filter, debug)
 			}
 
 			snapshot[entry.DN] = attributes

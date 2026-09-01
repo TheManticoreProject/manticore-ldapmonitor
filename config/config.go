@@ -1,10 +1,15 @@
-// Package config holds the parsed options of the tool, grouped so the monitor
-// receives one value instead of a dozen positional parameters.
+// Package config holds the parsed options of a run, grouped so a mode receives one
+// value instead of two dozen positional parameters.
 package config
 
-import "github.com/TheManticoreProject/Manticore/windows/credentials"
+import (
+	"github.com/TheManticoreProject/Manticore/windows/credentials"
 
-// Config is the whole configuration of a run.
+	"github.com/TheManticoreProject/manticore-ldapmonitor/directory"
+)
+
+// Config is the whole configuration of a run. A mode reads the parts that apply to
+// it.
 type Config struct {
 	// General
 	Debug bool
@@ -12,8 +17,16 @@ type Config struct {
 	Credentials *credentials.Credentials
 	// Network
 	Network Network
-	// Monitoring
+	// SearchBase is the distinguished name the operator asked to read, as typed.
+	// Empty means every naming context. It is resolved into Scope.SearchBases once
+	// the session is up.
+	SearchBase string
+	// Scope is what to read from the directory.
+	Scope directory.Scope
+	// Monitoring is how the loop of monitor mode behaves.
 	Monitoring Monitoring
+	// Reporting is what the operator asked to be shown out of what changed.
+	Reporting Reporting
 }
 
 // LDAP holds the LDAP transport and bind options.
@@ -36,16 +49,17 @@ type Network struct {
 	Domain           string
 }
 
-// Monitoring holds what to watch and how often.
+// Monitoring holds how often to read the directory again.
 type Monitoring struct {
-	// SearchBase is the single distinguished name to watch. Empty means watch every
-	// naming context the domain controller advertises.
-	SearchBase string
 	// TimeDelay is the number of seconds to wait between two queries.
 	TimeDelay int
 	// RandomizeDelay picks a random delay between 1 and 5 seconds before each query
 	// instead of using TimeDelay.
 	RandomizeDelay bool
+}
+
+// Reporting holds what to show out of everything that changed.
+type Reporting struct {
 	// IgnoreUserLogon drops the lastLogon and logonCount changes that every
 	// authentication in the domain produces.
 	IgnoreUserLogon bool
