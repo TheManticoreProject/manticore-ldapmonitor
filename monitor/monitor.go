@@ -13,15 +13,14 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/TheManticoreProject/Manticore/logger"
 	"github.com/TheManticoreProject/Manticore/network/ldap"
-	"github.com/TheManticoreProject/Manticore/windows/credentials"
 
 	"github.com/TheManticoreProject/manticore-ldapmonitor/config"
+	"github.com/TheManticoreProject/manticore-ldapmonitor/utils"
 )
 
 // randomDelayLowerBoundMs and randomDelayUpperBoundMs bound, in milliseconds, the
@@ -45,37 +44,21 @@ const (
 //	nil when the monitoring was interrupted, an error if connecting to the domain
 //	controller or querying it failed.
 func Run(cfg config.Config) error {
-	scheme := "ldap"
-	if cfg.Network.LDAP.UseLdaps {
-		scheme = "ldaps"
-	}
-	logger.Print(fmt.Sprintf("[>] Connecting to %s://%s:%d ...", scheme, cfg.Network.DomainController, cfg.Network.LDAP.LDAPPort))
+	utils.AnnounceConnection(cfg)
 
-	ldapSession, err := newSession(cfg)
+	ldapSession, err := utils.NewSession(cfg)
 	if err != nil {
 		return err
 	}
 	defer ldapSession.Close()
 
-	if hasSecret(cfg.Credentials) {
-		logger.Print(fmt.Sprintf("[+] Authenticated as \x1b[94m%s\\%s\x1b[0m.", cfg.Credentials.GetDomain(), cfg.Credentials.GetUsername()))
-	} else {
-		logger.Print(fmt.Sprintf("[+] Bound without authentication as \x1b[94m%s\x1b[0m.", cfg.Credentials.GetUsername()))
-	}
+	utils.AnnounceIdentity(cfg.Credentials)
 
-	searchBases, err := resolveSearchBases(ldapSession, cfg.Monitoring.SearchBase)
+	searchBases, err := utils.ResolveSearchBases(ldapSession, cfg.Monitoring.SearchBase)
 	if err != nil {
 		return err
 	}
-
-	logger.Print(fmt.Sprintf("[>] Monitored search bases (\x1b[93m%d\x1b[0m):", len(searchBases)))
-	for index, searchBase := range searchBases {
-		branch := "  ├── "
-		if index == len(searchBases)-1 {
-			branch = "  └── "
-		}
-		logger.Plain.Print(fmt.Sprintf("%s\x1b[94m%s\x1b[0m", branch, searchBase))
-	}
+	utils.AnnounceSearchBases("Monitored search bases", searchBases)
 
 	// Ctrl-C has to end the run cleanly rather than kill it mid-query, so the log
 	// file written with --logfile is flushed and closed by the caller's deferred
@@ -204,119 +187,6 @@ func takeSnapshotReconnecting(ldapSession *ldap.Session, searchBases []string, c
 		return nil, err
 	}
 	return snapshot, nil
-}
-
-// newSession creates the LDAP session and binds it to the domain controller.
-//
-// Parameters:
-//
-//	cfg (config.Config): The configuration of the run.
-//
-// Returns:
-//
-//	A connected LDAP session, or an error if the session could not be created or
-//	bound.
-func newSession(cfg config.Config) (*ldap.Session, error) {
-	ldapSession, err := ldap.NewSession(
-		cfg.Network.DomainController,
-		cfg.Network.LDAP.LDAPPort,
-		cfg.Credentials,
-		cfg.Network.LDAP.UseLdaps,
-		cfg.Network.LDAP.UseKerberos,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error creating LDAP session: %w", err)
-	}
-
-	// A Kerberos bind to a domain controller named by IP needs the FQDN in the SPN.
-	// Set before connecting; it is a no-op for the non-Kerberos and empty cases.
-	if cfg.Network.LDAP.UseKerberos && cfg.Network.LDAP.SPNHostname != "" {
-		ldapSession.SetKerberosSPNHostname(cfg.Network.LDAP.SPNHostname)
-	}
-
-	// A domain controller that enforces LDAP signing rejects a Kerberos bind that
-	// negotiates no security layer, which is what a current Windows Server does by
-	// default: "the server requires binds to turn on integrity checking if SSL\TLS
-	// are not already active on the connection". So a security layer is negotiated
-	// on plain LDAP, and not over LDAPS, where the TLS channel already protects the
-	// connection and Active Directory refuses a SASL layer stacked on top of it.
-	if cfg.Network.LDAP.UseKerberos && !cfg.Network.LDAP.UseLdaps {
-		if cfg.Network.LDAP.UseSealing {
-			ldapSession.SetGSSAPISealing()
-		} else {
-			ldapSession.SetGSSAPISigning()
-		}
-	}
-
-	// Connect already names the server and the transport in its error, so it is
-	// returned as-is rather than wrapped into the same sentence twice.
-	connected, err := ldapSession.Connect()
-	if err != nil {
-		return nil, err
-	}
-	if !connected {
-		return nil, fmt.Errorf("error connecting to LDAP server")
-	}
-
-	return ldapSession, nil
-}
-
-// hasSecret reports whether the credentials carry anything to authenticate with.
-//
-// A bind with no secret succeeds against a domain controller as an anonymous one, so
-// the connection message has to say which of the two happened rather than claim an
-// authentication that did not take place.
-//
-// Parameters:
-//
-//	creds (*credentials.Credentials): The credentials the session was built with.
-//
-// Returns:
-//
-//	True when a secret was supplied, false otherwise.
-func hasSecret(creds *credentials.Credentials) bool {
-	return creds.GetPassword() != "" ||
-		creds.CanPassTheHash() ||
-		creds.CanUseAESKey() ||
-		creds.CanUseCCache() ||
-		creds.CanUseKirbi() ||
-		creds.CanUseKeytab()
-}
-
-// resolveSearchBases determines what to monitor: the search base the caller asked
-// for, or every naming context the domain controller advertises.
-//
-// Parameters:
-//
-//	ldapSession (*ldap.Session): The connected LDAP session to query.
-//	searchBase (string): The distinguished name to monitor, or empty for all naming contexts.
-//
-// Returns:
-//
-//	The distinguished names to monitor, or an error if the requested search base
-//	does not exist or the naming contexts could not be read.
-func resolveSearchBases(ldapSession *ldap.Session, searchBase string) ([]string, error) {
-	searchBase = strings.TrimSpace(searchBase)
-
-	if searchBase == "" {
-		namingContexts, err := ldapSession.GetAllNamingContexts()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching the naming contexts: %w", err)
-		}
-		return namingContexts, nil
-	}
-
-	// A search base that does not exist yields an empty snapshot and a run that
-	// silently reports nothing forever, so it is rejected up front.
-	exists, err := ldapSession.DistinguishedNameExists(searchBase)
-	if err != nil {
-		return nil, fmt.Errorf("error checking search base '%s': %w", searchBase, err)
-	}
-	if !exists {
-		return nil, fmt.Errorf("search base '%s' does not exist", searchBase)
-	}
-
-	return []string{searchBase}, nil
 }
 
 // nextDelay returns how long to wait before the next query.
