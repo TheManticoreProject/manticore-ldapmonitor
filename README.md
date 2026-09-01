@@ -30,7 +30,6 @@ With this tool you can quickly see if your attack worked and if it changed the L
 - [x] Complete values of large multi-valued attributes, past the domain controller's 1500-value cap (MaxValRange), via incremental range retrieval
 - [x] Escape sequences in distinguished names, attribute names and values neutralized before they reach the terminal
 - [ ] Custom page size for the paged queries
-- [ ] Authenticate as the current shell user
 
 ## Installation
 
