@@ -15,7 +15,8 @@ With this tool you can quickly see if your attack worked and if it changed the L
 
 ## Features
 
-- [x] Monitor every naming context the domain controller advertises, or a single subtree with `--search-base`
+- [x] Three modes: `monitor` a domain live, `snapshot` it to a file, `diff` two of those files with no domain controller in reach
+- [x] Read every naming context the domain controller advertises, or a single subtree with `--search-base`, narrowed further with `--ldap-filter`
 - [x] Report object creations, object deletions, and the value of every attribute before and after it changed
 - [x] Custom delay between two queries with `--time-delay`, or a delay picked at random between 1 and 5 seconds with `--randomize-delay`
 - [x] Ignore the `lastLogon` and `logonCount` churn of user logon events with `--ignore-user-logon`
@@ -29,6 +30,7 @@ With this tool you can quickly see if your attack worked and if it changed the L
 - [x] Authenticate with a password (`-p`), a NT hash (`-H`), an AES key (`--aes-key`), or a Kerberos ticket (`--ticket-ccache`, `--ticket-kirbi`), over Kerberos (`-k`) or NTLM
 - [x] Complete values of large multi-valued attributes, past the domain controller's 1500-value cap (MaxValRange), via incremental range retrieval
 - [x] Escape sequences in distinguished names, attribute names and values neutralized before they reach the terminal
+- [x] Snapshot files gzipped on a `.gz` name, written atomically, and refused rather than half-parsed when they come from another tool or another format
 - [ ] Custom page size for the paged queries
 
 ## Installation
@@ -41,53 +43,32 @@ go install github.com/TheManticoreProject/manticore-ldapmonitor@latest
 
 ## Usage
 
+The tool has three modes. The first argument picks one.
+
 ```
-$ ./manticore-ldapmonitor --help
-manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.0.0
+$ ./manticore-ldapmonitor
+manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v2.0.0
 
-Usage: manticore-ldapmonitor --domain <string> --username <string> [--no-pass] [--debug] [--no-colors] [--logfile <string>] --dc-ip <string> [--dc-host <string>] [--ldap-port <tcp port>] [--use-ldaps] [--use-kerberos] [--use-sealing] [--search-base <string>] [--ignore-user-logon] [--time-delay <int>] [--randomize-delay] [--password <string>] [--hashes <string>] [--aes-key <string>] [--ticket-ccache <string>] [--ticket-kirbi <string>]
+Usage: manticore-ldapmonitor <diff|monitor|snapshot>
 
-
-  Authentication:
-    -d, --domain <string>   Active Directory domain to authenticate to.
-    -u, --username <string> User to authenticate as.
-    --no-pass               Do not ask for a password, bind without one. (default: false)
-
-  Configuration:
-    --debug                Debug mode. (default: false)
-    --no-colors            Print the output without colors. (default: false)
-    -l, --logfile <string> Log file to append the output to. (default: "")
-
-  LDAP Connection Settings:
-    -dc, --dc-ip <string>       IP address or hostname of the domain controller to monitor, which is also the KDC (Key Distribution Center) used for Kerberos.
-    --dc-host <string>          FQDN of the domain controller, used to build the Kerberos SPN when connecting by IP with -k. (default: "")
-    -lp, --ldap-port <tcp port> Port number to connect to LDAP server. (default: 389)
-    -L, --use-ldaps             Use LDAPS instead of LDAP. (default: false)
-    -k, --use-kerberos          Use Kerberos instead of NTLM. (default: false)
-    --use-sealing               Encrypt the LDAP traffic of a Kerberos session (GSSAPI confidentiality) instead of only signing it. Ignored with -L. (default: false)
-
-  Monitoring:
-    -S, --search-base <string> Distinguished name to monitor. If omitted, every naming context of the domain controller is monitored. (default: "")
-    --ignore-user-logon        Ignore the lastLogon and logonCount changes produced by user logon events. (default: false)
-
-  Query delay:
-    -t, --time-delay <int> Delay between two queries, in seconds. (default: 1)
-    -r, --randomize-delay  Randomize the delay between two queries, between 1 and 5 seconds. (default: false)
-
-  Secret:
-    -p, --password <string>  Password to authenticate with. (default: "")
-    -H, --hashes <string>    NT/LM hashes, format is LMhash:NThash. (default: "")
-    --aes-key <string>       AES key to use for Kerberos Authentication (128 or 256 bits). (default: "")
-    --ticket-ccache <string> Path to a Kerberos credential cache (ccache) holding a TGT for pass-the-ticket (implies -k). (default: "")
-    --ticket-kirbi <string>  Path to a .kirbi file holding a TGT for pass-the-ticket (implies -k). (default: "")
+   diff      Compare two readings taken by snapshot mode, with no domain controller in reach.
+   monitor   Watch a domain over LDAP and report every change as it happens.
+   snapshot  Read every object of a domain once and write them to a file.
 ```
+
+`monitor` is the tool as it has always worked: it watches a domain and reports each
+change as it lands, for as long as it runs. `snapshot` and `diff` split that in two,
+so that the reading and the comparison do not have to happen at the same moment, on
+the same host, or by the same person: capture the domain now, capture it again after
+the change, and compare the two files anywhere.
 
 At most one of the `Secret` options may be given. None is needed on the command
 line: the password is asked for on the terminal when it is missing, which keeps it out
 of `argv`, where the process list exposes it to every local user, and out of the shell
 history. It is read from standard input when that is not a terminal, so a script can
 pipe it in. `--no-pass` skips the question and binds without a password, which a
-domain controller will only let read the RootDSE.
+domain controller will only let read the RootDSE. `diff` reads two files and talks to
+nothing, so it asks for no secret at all.
 
 A domain controller that enforces LDAP signing, which is the default on a current
 Windows Server, answers a password or hash bind on plain LDAP with:
@@ -106,8 +87,8 @@ SASL layer on top of it.
 ### Monitor the whole domain
 
 ```
-$ ./manticore-ldapmonitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L
-manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.0.0
+$ ./manticore-ldapmonitor monitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L
+manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v2.0.0
 
 [2026-08-31 15h48m15s] [>] Connecting to ldaps://192.168.1.101:636 ...
 [2026-08-31 15h48m15s] [+] Authenticated as MANTICORE.local\Administrator.
@@ -135,9 +116,9 @@ Watching one container instead of the whole domain, with a 2 second delay betwee
 two queries, while an object is created, modified and deleted:
 
 ```
-$ ./manticore-ldapmonitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L \
+$ ./manticore-ldapmonitor monitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L \
     -t 2 -S 'CN=Users,DC=MANTICORE,DC=local'
-manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.0.0
+manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v2.0.0
 
 [2026-08-31 16h35m59s] [>] Connecting to ldaps://192.168.1.101:636 ...
 [2026-08-31 16h35m59s] [+] Authenticated as MANTICORE.local\Administrator.
@@ -171,9 +152,103 @@ that had just been reported.
 ### Quietly, to a log file
 
 ```
-$ ./manticore-ldapmonitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L \
+$ ./manticore-ldapmonitor monitor -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L \
     -S 'OU=Servers,DC=MANTICORE,DC=local' -r --ignore-user-logon -l ldapmonitor.log
 ```
+
+### Capture now, compare later
+
+Watching a domain live requires a process that has been running since before the
+change. "What changed since last week" does not fit that, and neither does an
+enumeration that has to happen on the engagement host while the analysis happens
+somewhere else. Two readings and a comparison do.
+
+```
+$ ./manticore-ldapmonitor snapshot -d MANTICORE.local -u Administrator -p 'Podalirius123!' -dc 192.168.1.101 -L \
+    -S 'CN=Users,DC=MANTICORE,DC=local' -o before.json.gz
+manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v2.0.0
+
+[2026-09-01 11h02m14s] [>] Connecting to ldaps://192.168.1.101:636 ...
+[2026-09-01 11h02m14s] [+] Authenticated as MANTICORE.local\Administrator.
+[2026-09-01 11h02m14s] [>] Search bases (1):
+  └── CN=Users,DC=MANTICORE,DC=local
+[2026-09-01 11h02m15s] [>] Objects read: 31.
+[2026-09-01 11h02m15s] [+] Reading written to before.json.gz.
+[2026-09-01 11h02m15s] Done.
+```
+
+Then, after the change, take a second reading and compare the two. Comparing needs
+neither the domain controller nor a credential:
+
+```
+$ ./manticore-ldapmonitor diff --before before.json.gz --after after.json.gz
+manticore-ldapmonitor - by Remi GASCOU (Podalirius) @ TheManticoreProject - v2.0.0
+
+[2026-09-01 17h36m59s] [>] Comparing before.json.gz (31 objects, taken 2026-09-01 09:02:15 UTC) with after.json.gz (31 objects, taken 2026-09-01 15:36:41 UTC).
+[2026-09-01 17h36m59s] [>] Changes (2):
+[2026-09-01 17h36m59s] [+] Object created: CN=TESTOBJ,CN=Users,DC=MANTICORE,DC=local
+[2026-09-01 17h36m59s] [~] Object updated: CN=Domain Admins,CN=Users,DC=MANTICORE,DC=local
+  └── Attribute "member" changed from 'CN=Administrator,CN=Users,DC=MANTICORE,DC=local' to ['CN=Administrator,CN=Users,DC=MANTICORE,DC=local', 'CN=TESTOBJ,CN=Users,DC=MANTICORE,DC=local']
+[2026-09-01 17h36m59s] Done.
+```
+
+The file is gzipped when its name ends in `.gz`, which is worth doing on anything but
+a small scope: a snapshot holds every attribute of every object in it. It is written
+to a temporary name and moved into place, so an interrupted capture never leaves a
+half-written file under the name that will later be diffed against. It records the
+scope it was taken with, and a comparison of two readings that do not cover the same
+ground is warned about rather than reported as objects appearing and disappearing:
+
+```
+[2026-09-01 17h37m08s] WARN: The two readings do not cover the same ground: the search bases differ: [OU=Servers,DC=MANTICORE,DC=local] then [DC=MANTICORE,DC=local]. Objects that only one of them read will be reported as appearing or disappearing.
+```
+
+### Options of each mode
+
+```
+$ ./manticore-ldapmonitor monitor --help
+...
+  Query delay:
+    -t, --time-delay <int> Delay between two queries, in seconds. (default: 1)
+    -r, --randomize-delay  Randomize the delay between two queries, between 1 and 5 seconds. (default: false)
+
+  Reporting:
+    --ignore-user-logon Ignore the lastLogon and logonCount changes produced by user logon events. (default: false)
+
+  Scope:
+    -S, --search-base <string> Distinguished name to read. If omitted, every naming context of the domain controller is read. (default: "")
+    -f, --ldap-filter <string> LDAP filter restricting which objects are read. (default: "(objectClass=*)")
+```
+
+```
+$ ./manticore-ldapmonitor snapshot --help
+...
+  Output:
+    -o, --outputfile <string> File to write the reading to. It is gzipped when the name ends in .gz, which is worth doing on anything but a small scope.
+
+  Scope:
+    -S, --search-base <string> Distinguished name to read. If omitted, every naming context of the domain controller is read. (default: "")
+    -f, --ldap-filter <string> LDAP filter restricting which objects are read. (default: "(objectClass=*)")
+```
+
+```
+$ ./manticore-ldapmonitor diff --help
+...
+  Configuration:
+    --debug                Debug mode. (default: false)
+    --no-colors            Print the output without colors. (default: false)
+    -l, --logfile <string> Log file to append the output to. (default: "")
+
+  Reporting:
+    --ignore-user-logon Ignore the lastLogon and logonCount changes produced by user logon events. (default: false)
+
+  Snapshots:
+    --before <string> The older reading.
+    --after <string>  The newer reading.
+```
+
+`monitor` and `snapshot` also carry the `Configuration`, `LDAP Connection Settings`,
+`Authentication` and `Secret` groups shown by `--help`.
 
 ## Typical use cases
 
@@ -186,6 +261,8 @@ Here are a few use cases where this tool is useful:
   `lastLogon` and `logonCount`.
 - Watch a delegation being written, as `msDS-AllowedToDelegateTo` or
   `msDS-AllowedToActOnBehalfOfOtherIdentity` appear on an account.
+- Take a reading before and after a change window, and report exactly what moved,
+  without leaving a process running across it.
 
 ## Limitations
 
@@ -198,7 +275,11 @@ Narrowing the scope with `--search-base` is what makes the loop tighter.
 
 Two snapshots are held at a time, the one being compared and the one being built,
 so the memory the tool uses grows with the number of objects and attributes in
-scope. `--search-base` is again the answer on a large domain.
+scope. `--search-base` and `--ldap-filter` are again the answer on a large domain,
+and they apply to `diff` too, which holds both files at once.
+
+`snapshot` and `diff` see only what the two readings caught. A change made and undone
+between them leaves no trace in either file, where `monitor` would have reported both.
 
 ## Demonstration
 
